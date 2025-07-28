@@ -1,4 +1,3 @@
-# viz.py
 from graphviz import Digraph
 from tensor import Tensor
 

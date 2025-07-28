@@ -13,7 +13,7 @@ class Module:
 
     def add_module(self, name: str, module: "Module"):
         if not isinstance(module, Module):
-            raise TypeError(...)
+            raise TypeError(f'Expected a Module, got {type(module).__name__}')
         self._modules[name] = module
         object.__setattr__(self, name, module)
 

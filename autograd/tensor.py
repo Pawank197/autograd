@@ -6,6 +6,7 @@ import numpy as np
 import math
 from helper import unbroadcast, make_tensor
 
+
 class Tensor:
     """
     This class represents a tensor in a computational graph, allowing for automatic differentiation(auto-grad).
@@ -21,8 +22,8 @@ class Tensor:
         self.label = label
 
     def __repr__(self):
-        return f"Tensor(data={self.data})"  
-    
+        return f"Tensor(data={self.data}, shape={self.shape}, requires_grad={self.requires_grad}, label='{self.label}')"  
+        
     # All the operations below are overloaded to work with both Tensor objects and numpy arrays, integers, or floats.
 
     def __add__(self, other):
@@ -126,30 +127,42 @@ class Tensor:
         return out
     
     def sum(self, axis=None, keepdims=False):
-        out = Tensor(np.sum(self.data, axis=axis, keepdims=keepdims), (self,), 'sum')
-        out.requires_grad = self.requires_grad
+        out = Tensor(np.sum(self.data, axis=axis, keepdims=keepdims), requires_grad=self.requires_grad)
+        out._prev = (self,)
+        out._op = 'sum'
         def _backward():
             if not self.requires_grad:
                 return
-            # out.grad is a scalar if axis=None, or has reduced shape if axis specified
-            grad = out.grad
             if axis is None:
-                # broadcast scalar to full shape
-                self.grad += np.ones_like(self.data) * grad
+                self.grad += np.ones_like(self.data) * out.grad
             else:
-                # make grad shape‑compatible, then broadcast
-                # e.g. if you summed over axis=1 of shape (4,3) → grad.shape==(4,)
-                # reshape it to (4,1) before broadcasting
-                shape = list(self.data.shape)
+                grad = out.grad
                 if not keepdims:
-                    for ax in sorted((axis if isinstance(axis, tuple) else (axis,)), reverse=True):
-                        shape.insert(ax, 1)
-                self.grad += grad.reshape(shape)
+                    axes = axis if isinstance(axis, tuple) else (axis,)
+                    axes = tuple(ax if ax >= 0 else ax + self.data.ndim for ax in axes)
+                    for ax in axes:
+                        grad = np.expand_dims(grad, ax)
+                self.grad += np.ones_like(self.data) * grad
         out._backward = _backward
         return out
     
+    def mean(self, axis=None, keepdims=False):
+        # Too lazy to write its backward pass, so its using the sum's + division's backward passes
+        summed = self.sum(axis=axis, keepdims=keepdims)
+        if axis is None:
+            count = self.data.size
+        else:
+            axes = axis if isinstance(axis, tuple) else (axis,)
+            count = 1
+            for ax in axes:
+                count *= self.shape[ax]
+        out = summed * (1.0 / count)
+        out.requires_grad = self.requires_grad
+        out._prev = (summed,)
+        out._op = 'mean'
+        return out                        
+
     def reshape(self, *shape):
-        # Reshape
         out = Tensor(self.data.reshape(shape), (self,), 'reshape')
         out.requires_grad = self.requires_grad
         def _backward():
@@ -158,6 +171,33 @@ class Tensor:
         out._backward = _backward
         return out
     
+    def gather(self, indices, dim=0):
+        if not isinstance(indices, (Tensor, np.ndarray)):
+            raise TypeError(f"Expected indices to be a Tensor or np.ndarray, got {type(indices).__name__}")
+        indices = make_tensor(indices, Tensor)
+
+        # Forward pass using np.take_along_axis
+        out_data = np.take_along_axis(self.data, indices.data, axis=dim)
+        out = Tensor(out_data, (self, indices), 'gather')
+        out.requires_grad = self.requires_grad
+
+        def _backward():
+            if not self.requires_grad:
+                return
+            grad = out.grad
+            grad_input = np.zeros_like(self.data, dtype=np.float32)
+
+            idxs = np.indices(indices.data.shape)
+            idxs = list(idxs)
+            idxs.insert(dim, indices.data)
+            idxs = tuple(idxs)
+
+            np.add.at(grad_input, idxs, grad)
+            self.grad += grad_input
+
+        out._backward = _backward
+        return out
+
     @property
     def T(self):
         # Transpose operation for Tensor
@@ -168,10 +208,33 @@ class Tensor:
                 self.grad += unbroadcast(out.grad.T, self.shape)
         out._backward = _backward
         return out
-
-
+    
+    def max(self, axis=None, keepdims=False):
+        max_data = np.max(self.data, axis=axis, keepdims=keepdims)
+        out = Tensor(max_data, (self,), 'max')
+        out.requires_grad = self.requires_grad
+        def _backward():
+            if not self.requires_grad:
+                return
+            grad = out.grad
+            if axis is not None and not keepdims:
+                grad = np.expand_dims(grad, axis)
+            max_keepdims = np.max(self.data, axis=axis, keepdims=True)
+            mask = (self.data == max_keepdims).astype(np.float32)
+            grad_input = mask * grad
+            self.grad += unbroadcast(grad_input, self.shape)
+        out._backward = _backward
+        return out if axis is None or keepdims else out.reshape(max_data.shape)
+    
     # Backward pass for autograd
     def backward(self, grad=None):
+        # no grad is only allowed for scalar backwards
+        if grad is None:
+            if self.shape != ():
+                raise ValueError("Gradients must be provided for non-scalar tensors.")
+            grad = np.ones_like(self.data, dtype=np.float32)
+
+        self.grad = grad.copy()
         # First, we need to get the topological order of the graph
         topo = []
         visited = set()
@@ -182,8 +245,10 @@ class Tensor:
                     build_topo(child)
                 topo.append(v)
         build_topo(self)
-
-        self.grad = np.ones_like(self.data, dtype=np.float32)
+        # Now we can compute the gradients in reverse order
         for v in reversed(topo):
-            v._backward()\
-            
+            v._backward()
+
+    def zero_grad(self):
+        # Reset the gradients to zero
+        self.grad = np.zeros_like(self.data, dtype=np.float32)

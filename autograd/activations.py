@@ -1,9 +1,11 @@
 from tensor import Tensor
 import numpy as np
 from helper import unbroadcast, make_tensor
+
 """
 Firstly, Activation functions
 """
+
 def relu(x: Tensor) -> Tensor:
     """
     Applies the ReLU activation function element-wise.
@@ -125,10 +127,11 @@ def softmax(x: Tensor, dim=-1) -> Tensor:
     Returns:
         Tensor: Output tensor with softamx applied.
     """
-    shifted = x - x.data.max(axis=dim, keepdims=True)
+    shifted = x - x.max(axis=dim, keepdims=True)
     exp_shifted = shifted.exp()
     sum_exp = exp_shifted.sum(axis=dim, keepdims=True)
-    out = Tensor(exp_shifted.data / sum_exp.data, (x,), 'softmax')
+    out_data = exp_shifted.data / sum_exp.data
+    out = Tensor(out_data, (x,), 'softmax')
     out.requires_grad = x.requires_grad
     def _backward():
         if x.requires_grad:
