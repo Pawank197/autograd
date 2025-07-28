@@ -67,7 +67,7 @@ class Linear(Module):
     def __init__(self, in_features, out_features, requires_grad=True):
         super().__init__()
         w = Tensor(np.random.uniform(-1, 1, (out_features, in_features)), requires_grad=requires_grad, label=f'Linear weight')
-        b   = Tensor(np.random.uniform(-1, 1, (out_features,)), requires_grad=requires_grad, label=f'linear bias')
+        b = Tensor(np.random.uniform(-1, 1, (out_features,)), requires_grad=requires_grad, label=f'linear bias')
         self.add_parameter('weight', w)
         self.add_parameter('bias', b)
 
